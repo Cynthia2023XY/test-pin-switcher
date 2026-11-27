@@ -1,0 +1,29 @@
+package.json
+  s_f0ff0a667c8394::t_1bc3a308c8f117 3
+entrypoints/background.ts
+  s_f0ff0a667c8394::t_65683d416a7e3c 66-78,90-95,103,124-125,140-142,147-148,157,164-190,192,194,203,229-235,243,250,257,263
+entrypoints/sidepanel/App.vue
+  s_f0ff0a667c8394::t_db1a9f176bb891 3,25-38,126,172,175-182,184,220-257,260,271,273-275,328,345,347,349,351,378,412,417-433,491
+entrypoints/sidepanel/style.css
+  s_f0ff0a667c8394::t_03855663a96805 96-119
+lib/pins.ts
+  s_f0ff0a667c8394::t_64bebeab430fd9 36,54-55,73
+package-lock.json
+  s_f0ff0a667c8394::t_476e89e43a4644 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "dac3da64577ecca964df70907e5af8a8fa85ea80",
+  "prompts": {},
+  "sessions": {
+    "s_f0ff0a667c8394": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a21b10-cdb6-70b2-922b-e27089acf524",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Cynthia2023XY <145202485+Cynthia2023XY@users.noreply.github.com>"
+    }
+  }
+}

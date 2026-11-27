@@ -1,0 +1,45 @@
+.env.example
+  s_f0ff0a667c8394::t_ad92ac94eeb604 1-2
+.gitignore
+  s_f0ff0a667c8394::t_a6f8de98fe00e0 1-6
+README.md
+  s_f0ff0a667c8394::t_5f13df635c5830 1-11
+entrypoints/background.ts
+  s_f0ff0a667c8394::t_b8be9752ce6a60 1-227
+entrypoints/sidepanel/App.vue
+  s_f0ff0a667c8394::t_7091e236667556 1-357
+entrypoints/sidepanel/index.html
+  s_f0ff0a667c8394::t_19eff35e1b9a27 1-12
+entrypoints/sidepanel/main.ts
+  s_f0ff0a667c8394::t_55dbb96f1ff123 1-5
+entrypoints/sidepanel/style.css
+  s_f0ff0a667c8394::t_2ef548cd9f5b80 1-107
+lib/gateway-config.ts
+  s_f0ff0a667c8394::t_ebfcd5a5423a8e 1-17
+lib/pins.ts
+  s_f0ff0a667c8394::t_b1e2b48322cd9a 1-90
+package-lock.json
+  s_f0ff0a667c8394::t_c46e1182304510 1-2996
+package.json
+  s_f0ff0a667c8394::t_fc6fcc5ce479f3 1-24
+tsconfig.json
+  s_f0ff0a667c8394::t_abd172ae0eb6a7 1-6
+wxt.config.ts
+  s_f0ff0a667c8394::t_95efe9ff882244 1-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "817fab8c08d96b0b5fd4c0c29d7abaa067b07c8a",
+  "prompts": {},
+  "sessions": {
+    "s_f0ff0a667c8394": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a21b10-cdb6-70b2-922b-e27089acf524",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Cynthia2023XY <145202485+Cynthia2023XY@users.noreply.github.com>"
+    }
+  }
+}

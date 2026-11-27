@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue';
-import { Check, Copy, Link2, LoaderCircle, Moon, Pencil, Plus, Search, Star, Sun } from '@lucide/vue';
+import { Check, Copy, Link2, LoaderCircle, Moon, Pencil, Plus, RefreshCw, Search, Star, Sun } from '@lucide/vue';
 import { browser } from 'wxt/browser';
 import {
   buildSeedUrl, compareByRecentUse, isTestPinCookie, pendingKey, recordsKey,
@@ -22,8 +22,20 @@ const systemDark = ref(systemTheme.matches);
 /** 用户手动选择的主题，空值表示跟随系统 */
 const themePreference = ref<Theme>();
 
-/** 偏好完成读取后再开放切换 */
-const themeLoaded = ref(false);
+/** 偏好完成读取后再开放设置和种 PIN */
+const settingsLoaded = ref(false);
+
+/** 保存成功后自动刷新页面的本地偏好键 */
+const autoReloadKey = 'autoReloadAfterSeed';
+
+/** 是否在种 PIN 成功后刷新发起时的页面 */
+const autoReload = ref(false);
+
+/** 一次手动刷新尚未返回 Chrome 调度结果 */
+const reloadingPage = ref(false);
+
+/** 手动刷新请求的反馈 */
+const pageReloadMessage = ref('');
 
 /** 当前渲染的主题 */
 const theme = computed<Theme>(() => themePreference.value ?? (systemDark.value ? 'dark' : 'light'));
@@ -111,7 +123,7 @@ const statusText: Record<AttemptStatus, string> = {
   pending: '待确认',
   confirmed: '已确认',
   unconfirmed: '未能确认',
-  failed: '发起失败',
+  failed: '请求失败',
 };
 
 /** 面板里的本地记录 */
@@ -157,13 +169,19 @@ const visibleRecords = computed(() => {
 
 /** 横跨种 PIN、等待确认和最终结果的反馈 */
 const switchMessage = computed(() => {
-  if (submitting.value) return '正在打开测试网关…';
+  if (submitting.value) return '正在请求测试网关…';
   if (snapshot.value?.pending) return '已发起，正在核验 ' + snapshot.value.pending.pin + '…';
   // 按用户刚触发的目标取结果，避免旧记录抢占反馈区。
-  const status = records.value.find((record) => record.pin === targetPin.value)?.lastAttempt?.status;
-  if (status === 'confirmed' && currentPin.value === targetPin.value) return '切换完成，可刷新业务页';
+  const attempt = records.value.find((record) => record.pin === targetPin.value)?.lastAttempt;
+  if (attempt?.status === 'confirmed' && currentPin.value === targetPin.value) {
+    if (attempt.pageReload === 'requested') return '切换完成，已自动刷新页面';
+    if (attempt.pageReload === 'skipped') return '切换完成，未自动刷新，可手动刷新当前页';
+    return '切换完成，可刷新业务页';
+  }
+  // 未确认或请求失败时保留重试提示。
+  const status = attempt?.status;
   if (status === 'unconfirmed') return '未能确认切换，请查看测试网关或重试。';
-  if (status === 'failed') return '无法发起切换，可在种 PIN 记录中重试。';
+  if (status === 'failed') return '种 PIN 请求失败，可在记录中重试。';
   return '';
 });
 
@@ -199,9 +217,47 @@ function refresh(): void {
   void send({ type: 'snapshot' });
 }
 
+/** 查找侧边栏所在窗口中当前显示的页面 */
+async function getActiveTabId(): Promise<number | undefined> {
+  // 只使用标签页 ID，无需读取页面 URL。
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  return tab?.id;
+}
+
+/** 保存是否在种 PIN 成功后自动刷新 */
+async function toggleAutoReload(): Promise<void> {
+  // 开关记录的是用户下次发起切换时的选择。
+  const enabled = !autoReload.value;
+  try {
+    await browser.storage.local.set({ [autoReloadKey]: enabled });
+    autoReload.value = enabled;
+  } catch {
+    errorMessage.value = '暂时无法保存自动刷新设置，请重试。';
+  }
+}
+
+/** 手动刷新当前窗口中的活动页面 */
+async function reloadCurrentPage(): Promise<void> {
+  if (reloadingPage.value || busy.value) return;
+  errorMessage.value = '';
+  pageReloadMessage.value = '';
+  reloadingPage.value = true;
+  try {
+    // 点击时重新选择当前页面，手动刷新始终作用于眼前的标签页。
+    const tabId = await getActiveTabId();
+    if (tabId === undefined) throw new Error();
+    await browser.tabs.reload(tabId);
+    pageReloadMessage.value = '已刷新当前页';
+  } catch {
+    errorMessage.value = '无法刷新当前页，请返回业务页后重试。';
+  } finally {
+    reloadingPage.value = false;
+  }
+}
+
 /** 从输入框或记录发起账号切换 */
 async function switchPin(value: string): Promise<void> {
-  if (busy.value) return;
+  if (busy.value || !settingsLoaded.value) return;
   // PIN 保留原大小写，只过滤输入中的首尾空白。
   const pin = value.trim();
   errorMessage.value = '';
@@ -212,8 +268,11 @@ async function switchPin(value: string): Promise<void> {
   submitting.value = true;
   targetPin.value = pin;
   pinInput.value = pin;
+  pageReloadMessage.value = '';
   try {
-    await send({ type: 'switch', pin });
+    // 种 PIN 的结果不依赖标签页枚举是否成功。
+    const refreshTabId = autoReload.value ? await getActiveTabId().catch(() => undefined) : undefined;
+    await send({ type: 'switch', pin, refreshTabId });
   } finally {
     submitting.value = false;
   }
@@ -266,6 +325,7 @@ async function copyCurrent(kind: 'pin' | 'link'): Promise<void> {
 /** 监听记录和进行中状态的持久化变更 */
 const onStorageChanged: Parameters<typeof browser.storage.onChanged.addListener>[0] = (changes, area) => {
   if (area === 'local' && changes[themeKey]) restoreTheme(changes[themeKey].newValue);
+  if (area === 'local' && changes[autoReloadKey]) autoReload.value = changes[autoReloadKey].newValue === true;
   if ((area === 'local' && changes[recordsKey]) || (area === 'session' && changes[pendingKey])) refresh();
 };
 
@@ -282,12 +342,13 @@ function refreshVisible(): void {
 onMounted(() => {
   browser.storage.onChanged.addListener(onStorageChanged);
   systemTheme.addEventListener('change', onSystemThemeChanged);
-  void browser.storage.local.get(themeKey).then((stored) => {
+  void browser.storage.local.get([themeKey, autoReloadKey]).then((stored) => {
     restoreTheme(stored[themeKey]);
+    autoReload.value = stored[autoReloadKey] === true;
   }).catch(() => {
-    // 存储暂不可读时继续使用当前系统外观。
+    // 存储暂不可读时使用系统外观，并保持自动刷新关闭。
   }).finally(() => {
-    themeLoaded.value = true;
+    settingsLoaded.value = true;
   });
   browser.cookies.onChanged.addListener(onTestPinCookieChanged);
   window.addEventListener('focus', refreshVisible);
@@ -314,7 +375,7 @@ onUnmounted(() => {
       <div class="header-actions">
         <span>测试环境</span>
         <button
-          type="button" class="button button-secondary theme-toggle" :disabled="!themeLoaded"
+          type="button" class="button button-secondary theme-toggle" :disabled="!settingsLoaded"
           :aria-label="themeAction" :title="themeAction" @click="toggleTheme"
         >
           <Sun v-if="theme === 'dark'" :size="17" aria-hidden="true" />
@@ -348,12 +409,28 @@ onUnmounted(() => {
       <label for="quick-pin">快速种 PIN</label>
       <div class="form-row">
         <input id="quick-pin" v-model="pinInput" autocomplete="off" placeholder="输入测试 PIN">
-        <button type="submit" class="button button-primary" :disabled="busy || !snapshot">
+        <button type="submit" class="button button-primary" :disabled="busy || !snapshot || !settingsLoaded">
           <LoaderCircle v-if="busy" class="spinner" :size="16" aria-hidden="true" />
           {{ busy ? '切换中' : '种 PIN' }}
         </button>
       </div>
-      <p v-if="switchMessage" class="switch-message" role="status">{{ switchMessage }}</p>
+      <div class="reload-actions">
+        <button
+          type="button" role="switch" class="reload-toggle" :aria-checked="autoReload"
+          aria-label="种 PIN 成功后自动刷新" :disabled="!settingsLoaded || busy" @click="toggleAutoReload"
+        >
+          <span class="switch-track" aria-hidden="true"></span>
+          成功后自动刷新
+        </button>
+        <button
+          type="button" class="button button-secondary" :disabled="busy || reloadingPage"
+          @click="reloadCurrentPage"
+        >
+          <RefreshCw :size="15" aria-hidden="true" />
+          刷新当前页
+        </button>
+      </div>
+      <p v-if="switchMessage || pageReloadMessage" class="switch-message" role="status">{{ pageReloadMessage || switchMessage }}</p>
       <p v-if="errorMessage" class="error-message" role="alert">{{ errorMessage }}</p>
     </form>
 
@@ -411,7 +488,7 @@ onUnmounted(() => {
             <Pencil :size="15" aria-hidden="true" />
           </button>
           <button
-            type="button" class="button button-secondary" :disabled="busy"
+            type="button" class="button button-secondary" :disabled="busy || !settingsLoaded"
             :aria-label="(record.lastAttempt?.status === 'unconfirmed' || record.lastAttempt?.status === 'failed' ? '重试 ' : '种 PIN ') + record.pin"
             @click="switchPin(record.pin)"
           >

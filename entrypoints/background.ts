@@ -63,6 +63,19 @@ async function readCurrent(): Promise<CurrentPin> {
   }
 }
 
+/** 刷新发起种 PIN 时的页面，用户切走或关闭页面时跳过 */
+async function reloadOriginTab(tabId: number): Promise<'requested' | 'skipped'> {
+  try {
+    // 刷新固定标签页，避免在异步确认后误刷刚切换到的页面。
+    const tab = await browser.tabs.get(tabId);
+    if (!tab.active) return 'skipped';
+    await browser.tabs.reload(tabId);
+    return 'requested';
+  } catch {
+    return 'skipped';
+  }
+}
+
 /** 将操作结果落盘，然后释放当前切换占用 */
 async function finishSwitch(operation: PendingSwitch, status: Exclude<AttemptStatus, 'pending'>): Promise<void> {
   // 只处理同一个操作，避免旧事件覆盖新的请求。
@@ -74,7 +87,12 @@ async function finishSwitch(operation: PendingSwitch, status: Exclude<AttemptSta
   const record = recordFor(records, operation.pin);
   if (record.lastAttempt?.id !== operation.id || record.lastAttempt.status === 'pending') {
     record.lastAttempt = { id: operation.id, startedAt: operation.startedAt, status };
-    if (status === 'confirmed') record.lastUsedAt = Date.now();
+    if (status === 'confirmed') {
+      record.lastUsedAt = Date.now();
+      if (operation.refreshTabId !== undefined) {
+        record.lastAttempt.pageReload = await reloadOriginTab(operation.refreshTabId);
+      }
+    }
     await writeRecords(records);
   }
   await browser.storage.session.remove(pendingKey);
@@ -82,7 +100,7 @@ async function finishSwitch(operation: PendingSwitch, status: Exclude<AttemptSta
 }
 
 /** 根据当前浏览器身份和截止时间处理未完成的切换 */
-async function reconcileSwitch(allowConfirmation: boolean): Promise<void> {
+async function reconcileSwitch(): Promise<void> {
   // 会话数据在浏览器重启时消失，将遗留的待确认记录转换为可重试状态。
   const pending = await readPending();
   if (!pending) {
@@ -103,8 +121,8 @@ async function reconcileSwitch(allowConfirmation: boolean): Promise<void> {
     return;
   }
 
-  if (allowConfirmation && pending.tabId !== undefined) {
-    // 标签页或 Cookie 变化是检查时机，实际确认要求当前身份匹配目标。
+  if (pending.responseReceived) {
+    // 本次网关请求成功返回后，才根据当前 Cookie 确认切换。
     const current = await readCurrent();
     if (current.status === 'verified' && current.pin === pending.pin) {
       await finishSwitch(pending, 'confirmed');
@@ -119,14 +137,15 @@ async function snapshot(): Promise<PinSnapshot> {
   return { current, records, pending };
 }
 
-/** 打开种 PIN 标签页，等待网关设置测试身份 */
-async function startSwitch(pin: string): Promise<void> {
-  await reconcileSwitch(false);
+/** 保存待确认状态，为后台网关请求预留一次操作 */
+async function prepareSwitch(pin: string, refreshTabId?: number): Promise<PendingSwitch> {
+  await reconcileSwitch();
   if (await readPending()) throw new PinOperationError('有一个 PIN 正在切换，请等待结果。');
 
   // 先保存操作意图，确保面板关闭或 Worker 重启时还能恢复。
   const startedAt = Date.now();
-  const operation = { id: crypto.randomUUID(), pin, startedAt, deadline: startedAt + switchTimeout };
+  const operation: PendingSwitch = { id: crypto.randomUUID(), pin, startedAt, deadline: startedAt + switchTimeout };
+  if (refreshTabId !== undefined) operation.refreshTabId = refreshTabId;
   await browser.storage.session.set({ [pendingKey]: operation });
 
   try {
@@ -135,25 +154,44 @@ async function startSwitch(pin: string): Promise<void> {
     recordFor(records, pin).lastAttempt = { id: operation.id, startedAt, status: 'pending' };
     await writeRecords(records);
     await browser.alarms.create(deadlineAlarm, { when: operation.deadline });
-
-    // 打开独立标签页并保留正在调试的业务页。
-    const tab = await browser.tabs.create({ url: buildSeedUrl(pin), active: false });
-    if (tab.id === undefined) {
-      await finishSwitch(operation, 'unconfirmed');
-      return;
-    }
-    await browser.storage.session.set({ [pendingKey]: { ...operation, tabId: tab.id } });
-    if (tab.status === 'complete') await reconcileSwitch(true);
+    return operation;
   } catch {
     await finishSwitch(operation, 'failed');
     throw new PinOperationError('无法发起种 PIN，请在记录中重试。');
   }
 }
 
+/** 请求已配置的测试网关，让 Chrome 正常接收测试身份 Cookie */
+async function requestSeed(operation: PendingSwitch): Promise<boolean> {
+  // 保留浏览器凭据处理，并避免复用缓存的种 PIN 响应。
+  const response = await fetch(buildSeedUrl(operation.pin), {
+    credentials: 'include',
+    cache: 'no-store',
+    signal: AbortSignal.timeout(Math.max(1, operation.deadline - Date.now())),
+  });
+  return response.ok;
+}
+
+/** 合并网关响应并复核本次切换，过期操作不能更新记录 */
+async function settleSeedResponse(operation: PendingSwitch, accepted: boolean): Promise<void> {
+  // 串行更新依旧以当前还在等待的操作为准。
+  const pending = await readPending();
+  if (pending?.id !== operation.id) return;
+
+  if (Date.now() >= pending.deadline) {
+    await finishSwitch(pending, 'unconfirmed');
+  } else if (!accepted) {
+    await finishSwitch(pending, 'failed');
+  } else {
+    await browser.storage.session.set({ [pendingKey]: { ...pending, responseReceived: true } });
+    await reconcileSwitch();
+  }
+}
+
 /** 处理侧边栏命令并返回最新状态 */
-async function handleCommand(command: PinCommand): Promise<PinReply> {
+async function handleCommand(command: PinCommand, launchSeed: (operation: PendingSwitch) => void): Promise<PinReply> {
   if (command.type === 'snapshot') {
-    await reconcileSwitch(false);
+    await reconcileSwitch();
     return { snapshot: await snapshot() };
   }
 
@@ -162,7 +200,7 @@ async function handleCommand(command: PinCommand): Promise<PinReply> {
   if (!pin) throw new PinOperationError('请输入测试 PIN。');
 
   if (command.type === 'switch') {
-    await startSwitch(pin);
+    launchSeed(await prepareSwitch(pin, command.refreshTabId));
   } else {
     // 备注与收藏在同一条记录上更新。
     const records = await readRecords();
@@ -188,6 +226,13 @@ export default defineBackground(() => {
     return result;
   };
 
+  // 网关请求在队列外等待，侧边栏仍能查看记录和保存备注。
+  const launchSeed = (operation: PendingSwitch): void => {
+    void requestSeed(operation).catch(() => false)
+      .then((accepted) => enqueue(() => settleSeedResponse(operation, accepted)))
+      .catch(() => undefined);
+  };
+
   // 安装后点击工具栏图标直接打开侧边栏。
   browser.runtime.onInstalled.addListener(() => {
     void browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
@@ -195,33 +240,26 @@ export default defineBackground(() => {
 
   // 浏览器重启后收敛上次中断的操作。
   browser.runtime.onStartup.addListener(() => {
-    void enqueue(() => reconcileSwitch(false)).catch(() => undefined);
+    void enqueue(() => reconcileSwitch()).catch(() => undefined);
   });
 
   browser.runtime.onMessage.addListener((message: PinCommand, sender, reply: (result: PinReply) => void) => {
     if (sender.id !== browser.runtime.id || sender.url !== browser.runtime.getURL('/sidepanel.html')) return false;
     if (!message || !['snapshot', 'switch', 'save', 'favorite'].includes(message.type)) return false;
 
-    void enqueue(() => handleCommand(message)).then(reply, (error: unknown) => {
+    void enqueue(() => handleCommand(message, launchSeed)).then(reply, (error: unknown) => {
       reply({ error: error instanceof PinOperationError ? error.message : '插件操作失败，请重试。' });
     });
     return true;
   });
 
-  browser.tabs.onUpdated.addListener((tabId, change) => {
-    if (change.status !== 'complete') return;
-    void enqueue(async () => {
-      if ((await readPending())?.tabId === tabId) await reconcileSwitch(true);
-    }).catch(() => undefined);
-  });
-
   browser.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === deadlineAlarm) void enqueue(() => reconcileSwitch(false)).catch(() => undefined);
+    if (alarm.name === deadlineAlarm) void enqueue(() => reconcileSwitch()).catch(() => undefined);
   });
 
   browser.cookies.onChanged.addListener(({ cookie, cause }) => {
     // Cookie 覆盖先触发移除，再触发写入，确认以最后一次写入为准。
     if (!isTestPinCookie(cookie) || cause === 'overwrite') return;
-    void enqueue(() => reconcileSwitch(true)).catch(() => undefined);
+    void enqueue(() => reconcileSwitch()).catch(() => undefined);
   });
 });

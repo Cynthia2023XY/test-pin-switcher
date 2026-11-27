@@ -33,6 +33,7 @@ export interface PinAttempt {
   id: string;
   startedAt: number;
   status: AttemptStatus;
+  pageReload?: 'requested' | 'skipped';
 }
 
 /** 每个测试 PIN 对应的一条本地记录 */
@@ -50,7 +51,8 @@ export interface PendingSwitch {
   pin: string;
   startedAt: number;
   deadline: number;
-  tabId?: number;
+  responseReceived?: boolean;
+  refreshTabId?: number;
 }
 
 /** 面板展示的实时身份核验结果 */
@@ -68,7 +70,7 @@ export interface PinSnapshot {
 /** 面板发送到后台的本地命令 */
 export type PinCommand =
   | { type: 'snapshot' }
-  | { type: 'switch'; pin: string }
+  | { type: 'switch'; pin: string; refreshTabId?: number }
   | { type: 'save'; pin: string; note: string }
   | { type: 'favorite'; pin: string };
 

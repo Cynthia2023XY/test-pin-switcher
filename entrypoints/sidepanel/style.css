@@ -1,17 +1,36 @@
+/* 浅色主题的页面、表单、操作和状态颜色 */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --page: light-dark(#fafbff, #15181e);
-  --surface: light-dark(#fff, #1e232c);
-  --ink: light-dark(#192339, #edf1fa);
-  --muted: light-dark(#5c677b, #9eaac0);
-  --line: light-dark(#dce2ef, #353e4f);
-  --primary: light-dark(#294ec7, #a5b8ff);
-  --on-primary: light-dark(#fff, #151c31);
-  --star: light-dark(#955309, #ffc069);
-  --error: light-dark(#b22333, #ffa7b1);
+  --page: #f3f6fb;
+  --surface: #fff;
+  --hover: #e9effa;
+  --ink: #192339;
+  --muted: #526178;
+  --line: #d4ddec;
+  --primary: #294ec7;
+  --on-primary: #fff;
+  --star: #a35a08;
+  --star-fill: #ffbf32;
+  --error: #b22333;
   background: var(--page);
   color: var(--ink);
+}
+
+/* 深色主题继续使用低亮度底色和较亮的操作强调色 */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #15181e;
+  --surface: #1e232c;
+  --hover: #283140;
+  --ink: #edf1fa;
+  --muted: #9eaac0;
+  --line: #353e4f;
+  --primary: #a5b8ff;
+  --on-primary: #151c31;
+  --star: #ffc069;
+  --star-fill: var(--star);
+  --error: #ffa7b1;
 }
 
 * { box-sizing: border-box; }
@@ -33,8 +52,10 @@ input {
 }
 input::placeholder { color: var(--muted); }
 .panel { padding: 16px 14px; max-width: 560px; margin-inline: auto; }
-.panel-header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+.panel-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
 .panel-header h1 { font-size: 21px; letter-spacing: -.02em; }
+.header-actions { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+.button.theme-toggle { width: 35px; padding: 0; }
 .panel-header span, .current-placeholder, .current-note span, .record-info p, .attempt, .empty { color: var(--muted); }
 .panel-header span, .current-note, .attempt, .record-info p { font-size: 12px; }
 .current-card, .editor {
@@ -65,10 +86,10 @@ input::placeholder { color: var(--muted); }
 }
 .button-primary { color: var(--on-primary); background: var(--primary); border: 1px solid var(--primary); font-weight: 600; }
 .button-secondary { background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
-.button-secondary:hover:not(:disabled), .button-icon:hover:not(:disabled) { background: var(--page); }
+.button-secondary:hover:not(:disabled), .button-icon:hover:not(:disabled) { background: var(--hover); }
 .button-icon { color: var(--muted); border: 1px solid transparent; background: transparent; width: 31px; padding: 0; }
 .button-icon.is-favorite { color: var(--star); }
-.is-favorite svg { fill: currentColor; }
+.is-favorite svg { fill: var(--star-fill); }
 .quick-form { display: grid; gap: 6px; margin-top: 15px; }
 .quick-form label { font-weight: 600; }
 .quick-form input, .search-field { flex: 1; }

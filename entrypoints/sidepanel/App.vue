@@ -1,11 +1,62 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue';
-import { Check, Copy, Link2, LoaderCircle, Pencil, Plus, Search, Star } from '@lucide/vue';
+import { Check, Copy, Link2, LoaderCircle, Moon, Pencil, Plus, Search, Star, Sun } from '@lucide/vue';
 import { browser } from 'wxt/browser';
 import {
   buildSeedUrl, compareByRecentUse, isTestPinCookie, pendingKey, recordsKey,
   type AttemptStatus, type PinCommand, type PinRecord, type PinReply, type PinSnapshot,
 } from '../../lib/pins';
+
+/** 侧边栏可保存的外观选项 */
+type Theme = 'light' | 'dark';
+
+/** 当前 Chrome 配置文件的外观偏好键 */
+const themeKey = 'sidepanelTheme';
+
+/** 浏览器提供的系统颜色偏好 */
+const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+
+/** 没有手动选择时使用的系统主题 */
+const systemDark = ref(systemTheme.matches);
+
+/** 用户手动选择的主题，空值表示跟随系统 */
+const themePreference = ref<Theme>();
+
+/** 偏好完成读取后再开放切换 */
+const themeLoaded = ref(false);
+
+/** 当前渲染的主题 */
+const theme = computed<Theme>(() => themePreference.value ?? (systemDark.value ? 'dark' : 'light'));
+
+/** 图标按钮提供的下一步操作 */
+const themeAction = computed(() => theme.value === 'dark' ? '切换到浅色模式' : '切换到深色模式');
+
+/** 在页面根节点应用主题，让表单控件和背景同步更新 */
+watch(theme, (value) => {
+  document.documentElement.dataset.theme = value;
+}, { immediate: true });
+
+/** 系统外观变化时同步未手动设置的面板 */
+function onSystemThemeChanged(event: MediaQueryListEvent): void {
+  systemDark.value = event.matches;
+}
+
+/** 应用从本地存储读取的有效主题偏好 */
+function restoreTheme(value: unknown): void {
+  themePreference.value = value === 'light' || value === 'dark' ? value : undefined;
+}
+
+/** 切换到另一套外观并保存偏好 */
+async function toggleTheme(): Promise<void> {
+  // 在点击时取当前有效主题，首次手动切换也能正确取反。
+  const nextTheme = theme.value === 'dark' ? 'light' : 'dark';
+  try {
+    await browser.storage.local.set({ [themeKey]: nextTheme });
+    restoreTheme(nextTheme);
+  } catch {
+    errorMessage.value = '暂时无法保存外观设置，请重试。';
+  }
+}
 
 /** 面板当前显示的账号与记录 */
 const snapshot = ref<PinSnapshot>();
@@ -214,6 +265,7 @@ async function copyCurrent(kind: 'pin' | 'link'): Promise<void> {
 
 /** 监听记录和进行中状态的持久化变更 */
 const onStorageChanged: Parameters<typeof browser.storage.onChanged.addListener>[0] = (changes, area) => {
+  if (area === 'local' && changes[themeKey]) restoreTheme(changes[themeKey].newValue);
   if ((area === 'local' && changes[recordsKey]) || (area === 'session' && changes[pendingKey])) refresh();
 };
 
@@ -229,6 +281,14 @@ function refreshVisible(): void {
 
 onMounted(() => {
   browser.storage.onChanged.addListener(onStorageChanged);
+  systemTheme.addEventListener('change', onSystemThemeChanged);
+  void browser.storage.local.get(themeKey).then((stored) => {
+    restoreTheme(stored[themeKey]);
+  }).catch(() => {
+    // 存储暂不可读时继续使用当前系统外观。
+  }).finally(() => {
+    themeLoaded.value = true;
+  });
   browser.cookies.onChanged.addListener(onTestPinCookieChanged);
   window.addEventListener('focus', refreshVisible);
   document.addEventListener('visibilitychange', refreshVisible);
@@ -238,6 +298,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   browser.storage.onChanged.removeListener(onStorageChanged);
+  systemTheme.removeEventListener('change', onSystemThemeChanged);
   browser.cookies.onChanged.removeListener(onTestPinCookieChanged);
   window.removeEventListener('focus', refreshVisible);
   document.removeEventListener('visibilitychange', refreshVisible);
@@ -250,7 +311,16 @@ onUnmounted(() => {
   <main class="panel">
     <header class="panel-header">
       <h1>测试 PIN</h1>
-      <span>测试环境</span>
+      <div class="header-actions">
+        <span>测试环境</span>
+        <button
+          type="button" class="button button-secondary theme-toggle" :disabled="!themeLoaded"
+          :aria-label="themeAction" :title="themeAction" @click="toggleTheme"
+        >
+          <Sun v-if="theme === 'dark'" :size="17" aria-hidden="true" />
+          <Moon v-else :size="17" aria-hidden="true" />
+        </button>
+      </div>
     </header>
 
     <section class="current-card" aria-labelledby="current-label">
